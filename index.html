@@ -173,7 +173,25 @@
     function closeDetail() {
       detail.classList.remove("open");
       currentPhoto = null;
+      resumeCamera();
     }
+
+    // 止まってしまったカメラを動かし直す
+    function resumeCamera() {
+      const track = stream && stream.getVideoTracks()[0];
+      if (!track || track.readyState === "ended" || track.muted) {
+        // カメラが切れていたら起動し直す
+        startCamera();
+      } else {
+        // 映像が一時停止しているだけなら再生し直す
+        video.play().catch(() => startCamera());
+      }
+    }
+
+    // 他のアプリから戻ってきたときも動かし直す
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") resumeCamera();
+    });
 
     /* ========== カメラ ========== */
 
