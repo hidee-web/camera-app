@@ -27,6 +27,7 @@
       display: flex; gap: 6px; padding: 8px; overflow-x: auto; min-height: 76px; background: #111;
     }
     #photos img { width: 60px; height: 60px; object-fit: cover; border-radius: 6px; flex-shrink: 0; }
+    #empty { color: #888; font-size: 13px; align-self: center; padding-left: 4px; }
 
     /* 操作ボタン */
     #controls {
@@ -46,6 +47,20 @@
 
     /* シャッター時のフラッシュ演出 */
     #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
+
+    /* 写真の拡大表示 */
+    #detail {
+      position: fixed; inset: 0; background: #000; display: none; flex-direction: column;
+      padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+    }
+    #detail.open { display: flex; }
+    #detail img { flex: 1; width: 100%; min-height: 0; object-fit: contain; }
+    #detail .bar { display: flex; justify-content: space-around; padding: 16px; }
+    #detail button {
+      padding: 10px 18px; border-radius: 20px; border: none; font-size: 15px;
+      background: #333; color: #fff;
+    }
+    #detail #delete { background: #b91c1c; }
   </style>
 </head>
 <body>
@@ -55,12 +70,22 @@
     <div id="message">カメラを起動しています…</div>
   </div>
 
-  <div id="photos"></div>
+  <div id="photos"><span id="empty">撮った写真がここに並びます</span></div>
 
   <div id="controls">
     <div class="spacer"></div>
     <button id="shutter" aria-label="撮影"></button>
     <button id="switch" aria-label="カメラ切り替え">🔄</button>
+  </div>
+
+  <!-- 拡大表示の画面 -->
+  <div id="detail">
+    <img id="detailImg" alt="">
+    <div class="bar">
+      <button id="close">閉じる</button>
+      <button id="share">共有・保存</button>
+      <button id="delete">削除</button>
+    </div>
   </div>
 
   <div id="flash"></div>
@@ -71,14 +96,88 @@
     const message = document.getElementById("message");
     const canvas = document.getElementById("canvas");
     const photos = document.getElementById("photos");
+    const empty = document.getElementById("empty");
     const flash = document.getElementById("flash");
+    const detail = document.getElementById("detail");
+    const detailImg = document.getElementById("detailImg");
 
     let stream = null;
     let facingMode = "environment"; // environment = 背面カメラ, user = 前面カメラ
+    let currentPhoto = null;        // 拡大表示中の写真
 
-    // カメラを起動する
+    /* ========== IndexedDB（iPhoneの中のデータベース） ========== */
+
+    // データベースを開く（なければ作る）
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open("camera-app", 1);
+        req.onupgradeneeded = () => {
+          // "photos" という保存場所を作る。id は自動で 1, 2, 3… と振られる
+          req.result.createObjectStore("photos", { keyPath: "id", autoIncrement: true });
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    // 写真を1枚保存する
+    async function savePhoto(blob) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction("photos", "readwrite");
+        const req = tx.objectStore("photos").add({ blob: blob, createdAt: Date.now() });
+        req.onsuccess = () => resolve(req.result); // 振られた id が返ってくる
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    // 保存されている写真を全部読み込む
+    async function loadPhotos() {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const req = db.transaction("photos").objectStore("photos").getAll();
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    // 写真を1枚削除する
+    async function deletePhoto(id) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction("photos", "readwrite");
+        tx.objectStore("photos").delete(id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    /* ========== 画面表示 ========== */
+
+    // 一覧の先頭にサムネイルを1枚追加する
+    function addThumbnail(photo) {
+      const img = document.createElement("img");
+      img.src = URL.createObjectURL(photo.blob);
+      img.addEventListener("click", () => openDetail(photo, img));
+      photos.prepend(img);
+      empty.style.display = "none";
+    }
+
+    // 拡大表示を開く
+    function openDetail(photo, thumb) {
+      currentPhoto = { ...photo, thumb: thumb };
+      detailImg.src = thumb.src;
+      detail.classList.add("open");
+    }
+
+    function closeDetail() {
+      detail.classList.remove("open");
+      currentPhoto = null;
+    }
+
+    /* ========== カメラ ========== */
+
     async function startCamera() {
-      // 前のカメラが動いていたら止める
       if (stream) {
         stream.getTracks().forEach((track) => track.stop());
       }
@@ -88,7 +187,6 @@
           audio: false,
         });
         video.srcObject = stream;
-        // 前面カメラのときは鏡のように左右反転して表示
         video.style.transform = facingMode === "user" ? "scaleX(-1)" : "none";
         message.style.display = "none";
       } catch (err) {
@@ -98,11 +196,9 @@
       }
     }
 
-    // 撮影する
     function takePhoto() {
       if (!stream) return;
 
-      // 映像の今のコマを canvas に描き写す
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
       const ctx = canvas.getContext("2d");
@@ -112,26 +208,74 @@
       }
       ctx.drawImage(video, 0, 0);
 
-      // 画像にして一覧の先頭に追加
-      const img = document.createElement("img");
-      img.src = canvas.toDataURL("image/jpeg", 0.9);
-      photos.prepend(img);
-
       // フラッシュ演出
       flash.style.opacity = "0.8";
       setTimeout(() => (flash.style.opacity = "0"), 100);
+
+      // 画像データ（Blob）にして保存 → 一覧に追加
+      canvas.toBlob(async (blob) => {
+        try {
+          const id = await savePhoto(blob);
+          addThumbnail({ id: id, blob: blob });
+        } catch (err) {
+          alert("保存に失敗しました：" + err.message);
+        }
+      }, "image/jpeg", 0.9);
     }
 
-    // 前面・背面を切り替える
     function switchCamera() {
       facingMode = facingMode === "environment" ? "user" : "environment";
       startCamera();
     }
 
+    /* ========== ボタンの設定 ========== */
+
     document.getElementById("shutter").addEventListener("click", takePhoto);
     document.getElementById("switch").addEventListener("click", switchCamera);
+    document.getElementById("close").addEventListener("click", closeDetail);
 
-    startCamera();
+    // 共有・保存（iPhoneの共有シートから「画像を保存」で写真アプリに保存できる）
+    document.getElementById("share").addEventListener("click", async () => {
+      if (!currentPhoto) return;
+      const file = new File([currentPhoto.blob], "photo-" + currentPhoto.id + ".jpg", { type: "image/jpeg" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file] });
+        } catch (err) {
+          // 共有シートを閉じただけの場合は何もしない
+        }
+      } else {
+        alert("この端末では共有できません。画像を長押しして保存してください。");
+      }
+    });
+
+    document.getElementById("delete").addEventListener("click", async () => {
+      if (!currentPhoto) return;
+      if (!confirm("この写真を削除しますか？")) return;
+      await deletePhoto(currentPhoto.id);
+      currentPhoto.thumb.remove();
+      if (photos.querySelectorAll("img").length === 0) empty.style.display = "";
+      closeDetail();
+    });
+
+    /* ========== 起動時の処理 ========== */
+
+    async function init() {
+      // 保存済みの写真を読み込んで並べる（古い順に追加 → 新しいものが先頭に来る）
+      try {
+        const saved = await loadPhotos();
+        saved.forEach(addThumbnail);
+      } catch (err) {
+        console.error(err);
+      }
+      // データが勝手に消されにくくなるようにお願いする
+      if (navigator.storage && navigator.storage.persist) {
+        navigator.storage.persist();
+      }
+      startCamera();
+    }
+
+    init();
   </script>
 </body>
 </html>
