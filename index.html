@@ -1,25 +1,137 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>カメラアプリ</title>
-    <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" href="icons/icon-180.png">
-    <meta name="apple-mobile-web-app-title" content="カメラ">
-    <meta name="theme-color" content="#2563eb">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>カメラアプリ</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <meta name="apple-mobile-web-app-title" content="カメラ">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#000000">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: #000; color: #fff; font-family: sans-serif; }
+    body { display: flex; flex-direction: column; }
+
+    /* カメラ映像 */
+    #viewer { position: relative; flex: 1; overflow: hidden; }
+    #video { width: 100%; height: 100%; object-fit: cover; }
+    #message {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      padding: 24px; text-align: center; line-height: 1.6;
+    }
+
+    /* 撮った写真の一覧 */
+    #photos {
+      display: flex; gap: 6px; padding: 8px; overflow-x: auto; min-height: 76px; background: #111;
+    }
+    #photos img { width: 60px; height: 60px; object-fit: cover; border-radius: 6px; flex-shrink: 0; }
+
+    /* 操作ボタン */
+    #controls {
+      display: flex; align-items: center; justify-content: space-around;
+      padding: 16px 24px calc(16px + env(safe-area-inset-bottom)); background: #000;
+    }
+    #shutter {
+      width: 72px; height: 72px; border-radius: 50%;
+      border: 5px solid #fff; background: #fff; background-clip: content-box; padding: 3px;
+    }
+    #shutter:active { transform: scale(0.92); }
+    #switch {
+      width: 48px; height: 48px; border-radius: 50%; border: none;
+      background: #333; color: #fff; font-size: 22px;
+    }
+    .spacer { width: 48px; }
+
+    /* シャッター時のフラッシュ演出 */
+    #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
+  </style>
 </head>
 <body>
-    <h1>カメラアプリ</h1>
-    <input type="file" accept="image/*" capture="environment" id="camera">
-    <img id="preview" style="max-width:100%; margin-top:16px;">
-    <script>
-        document.getElementById('camera').addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (file) {
-                    document.getElementById('preview').src = URL.createObjectURL(file);
-                };
-            });
-    </script>
+  <div id="viewer">
+    <!-- playsinline がないと iPhone で全画面再生になってしまう -->
+    <video id="video" autoplay playsinline muted></video>
+    <div id="message">カメラを起動しています…</div>
+  </div>
+
+  <div id="photos"></div>
+
+  <div id="controls">
+    <div class="spacer"></div>
+    <button id="shutter" aria-label="撮影"></button>
+    <button id="switch" aria-label="カメラ切り替え">🔄</button>
+  </div>
+
+  <div id="flash"></div>
+  <canvas id="canvas" hidden></canvas>
+
+  <script>
+    const video = document.getElementById("video");
+    const message = document.getElementById("message");
+    const canvas = document.getElementById("canvas");
+    const photos = document.getElementById("photos");
+    const flash = document.getElementById("flash");
+
+    let stream = null;
+    let facingMode = "environment"; // environment = 背面カメラ, user = 前面カメラ
+
+    // カメラを起動する
+    async function startCamera() {
+      // 前のカメラが動いていたら止める
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: facingMode },
+          audio: false,
+        });
+        video.srcObject = stream;
+        // 前面カメラのときは鏡のように左右反転して表示
+        video.style.transform = facingMode === "user" ? "scaleX(-1)" : "none";
+        message.style.display = "none";
+      } catch (err) {
+        message.style.display = "flex";
+        message.textContent =
+          "カメラを起動できませんでした。設定でカメラの使用を許可してください。（" + err.name + "）";
+      }
+    }
+
+    // 撮影する
+    function takePhoto() {
+      if (!stream) return;
+
+      // 映像の今のコマを canvas に描き写す
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext("2d");
+      if (facingMode === "user") {
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+      }
+      ctx.drawImage(video, 0, 0);
+
+      // 画像にして一覧の先頭に追加
+      const img = document.createElement("img");
+      img.src = canvas.toDataURL("image/jpeg", 0.9);
+      photos.prepend(img);
+
+      // フラッシュ演出
+      flash.style.opacity = "0.8";
+      setTimeout(() => (flash.style.opacity = "0"), 100);
+    }
+
+    // 前面・背面を切り替える
+    function switchCamera() {
+      facingMode = facingMode === "environment" ? "user" : "environment";
+      startCamera();
+    }
+
+    document.getElementById("shutter").addEventListener("click", takePhoto);
+    document.getElementById("switch").addEventListener("click", switchCamera);
+
+    startCamera();
+  </script>
 </body>
 </html>
