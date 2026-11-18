@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>カメラアプリ</title>
+</head>
+<body>
+    <h1>カメラアプリ</h1>
+    <input type="file" accept="image/*" capture="environment" id="camera">
+    <img id="preview" style="max-width:100%; margin-top:16px;">
+    <script>
+        document.getElementById('camera').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                    document.getElementById('preview').src = URL.createObjectURL(file);
+                };
+            });
+    </script>
+</body>
+</html>
